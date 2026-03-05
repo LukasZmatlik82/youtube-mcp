@@ -7,15 +7,15 @@ import { google } from 'googleapis';
 
 const app = express();
 app.use(cors());
-app.use(express.json()); // Allows parsing POST requests from Duvo
+app.use(express.json()); // Allows parsing POST requests
 
 // 1. Initialize the MCP Server
 const mcpServer = new Server(
-    { name: "youtube-uploader-mcp", version: "1.0.0" },
+    { name: "youtube-uploader-mcp", version: "1.0.1" },
     { capabilities: { tools: {} } }
 );
 
-// 2. Define the Tool for Duvo
+// 2. Define the Tool
 mcpServer.setRequestHandler(ListToolsRequestSchema, async () => {
     return {
         tools: [{
@@ -37,13 +37,12 @@ mcpServer.setRequestHandler(ListToolsRequestSchema, async () => {
     };
 });
 
-// 3. Execute the YouTube Upload logic when Duvo calls the tool
+// 3. Execute the YouTube Upload logic
 mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
     if (request.params.name === "upload_to_youtube") {
         const { driveFileId, title, description, tags, privacyStatus, publishAt } = request.params.arguments;
         
         try {
-            // Setup Authentication
             const oauth2Client = new google.auth.OAuth2(
                 process.env.GOOGLE_CLIENT_ID,
                 process.env.GOOGLE_CLIENT_SECRET
@@ -53,13 +52,11 @@ mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
             const drive = google.drive({ version: 'v3', auth: oauth2Client });
             const youtube = google.youtube({ version: 'v3', auth: oauth2Client });
 
-            // Fetch the video file stream from Google Drive
             const driveResponse = await drive.files.get(
                 { fileId: driveFileId, alt: 'media' },
                 { responseType: 'stream' }
             );
 
-            // Construct YouTube upload metadata
             const insertParams = {
                 part: 'snippet,status',
                 requestBody: {
@@ -69,7 +66,6 @@ mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
                 media: { body: driveResponse.data }
             };
 
-            // Execute YouTube Upload
             const res = await youtube.videos.insert(insertParams);
             
             return {
@@ -85,16 +81,33 @@ mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
     throw new Error("Tool not found");
 });
 
-// 4. Set up the SSE web endpoints for Duvo
+// 4. Set up the SSE web endpoints for Duvo (THE FIX IS HERE)
 let transport;
+
+// Health check route for your browser
+app.get('/', (req, res) => {
+    res.send("YouTube MCP Server is awake and running perfectly!");
+});
 
 // Duvo connects here first to establish the stream
 app.get('/mcp', async (req, res) => {
-    transport = new SSEServerTransport('/message', res);
+    console.log("Client connected to SSE stream.");
+    // We tell the transport to expect POSTs on /mcp
+    transport = new SSEServerTransport('/mcp', res);
     await mcpServer.connect(transport);
 });
 
-// Duvo sends its commands here
+// Duvo sends its commands here (Catching POSTs on /mcp)
+app.post('/mcp', async (req, res) => {
+    console.log("Received POST message from Duvo.");
+    if (transport) {
+        await transport.handlePostMessage(req, res);
+    } else {
+        res.status(400).send("No active MCP connection");
+    }
+});
+
+// Fallback just in case Duvo respects the old /message path
 app.post('/message', async (req, res) => {
     if (transport) {
         await transport.handlePostMessage(req, res);
