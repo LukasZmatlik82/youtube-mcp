@@ -7,11 +7,11 @@ import { google } from 'googleapis';
 
 const app = express();
 app.use(cors());
-app.use(express.json()); // Allows parsing POST requests
+// CRITICAL FIX: Removed express.json() so the MCP SDK can read the raw stream directly!
 
 // 1. Initialize the MCP Server
 const mcpServer = new Server(
-    { name: "youtube-uploader-mcp", version: "1.0.1" },
+    { name: "youtube-uploader-mcp", version: "1.0.2" },
     { capabilities: { tools: {} } }
 );
 
@@ -81,34 +81,24 @@ mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
     throw new Error("Tool not found");
 });
 
-// 4. Set up the SSE web endpoints for Duvo (THE FIX IS HERE)
+// 4. Set up the SSE web endpoints for Duvo
 let transport;
 
-// Health check route for your browser
 app.get('/', (req, res) => {
     res.send("YouTube MCP Server is awake and running perfectly!");
 });
 
-// Duvo connects here first to establish the stream
+// GET establishes the SSE stream
 app.get('/mcp', async (req, res) => {
     console.log("Client connected to SSE stream.");
-    // We tell the transport to expect POSTs on /mcp
+    // Initialize transport and tell client to POST back to /mcp
     transport = new SSEServerTransport('/mcp', res);
     await mcpServer.connect(transport);
 });
 
-// Duvo sends its commands here (Catching POSTs on /mcp)
+// POST handles the actual commands (now with the stream fully intact)
 app.post('/mcp', async (req, res) => {
     console.log("Received POST message from Duvo.");
-    if (transport) {
-        await transport.handlePostMessage(req, res);
-    } else {
-        res.status(400).send("No active MCP connection");
-    }
-});
-
-// Fallback just in case Duvo respects the old /message path
-app.post('/message', async (req, res) => {
     if (transport) {
         await transport.handlePostMessage(req, res);
     } else {
